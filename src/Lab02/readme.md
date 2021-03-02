@@ -1,6 +1,6 @@
 # Deploy pre-built software into Kubernetes
 
-In this lab we'll install RabbitMQ into K8s using Helm, and then we'll use `kubectl` to deploy the Gateway web site into K8s.
+In this lab we'll use `kubectl` to deploy the Gateway web site into K8s.
 
 Lesson goals:
 
@@ -99,23 +99,18 @@ In Lab01 you did something similar by providing ACR credentials to the Azure App
 
 To do this for Kubernetes you use the `kubectl` command to create a secret that contains the credentials, and then provide the name of that secret in the `deploy.yaml` file.
 
-First it is necessary to get a _service principal ID_ and _service principal password_ from Azure.
+As in Lab01, the admin credentials can be retrieved using the following command line (or via the web portal):
 
-1. Get the ACR registry id value
-   * `az acr show --name myrepository --query id --output tsv`
-1. To get the password, replace `myrepository` with your repository name and type
-   * `az ad sp create-for-rbac --name http://acr-service-principal --role acrpull --scopes <acr-registry-id> --query password --output tsv`
-   * Replace "\<acr-registry-id\>" with the value from step 1
-1. To get the service principal ID type
-   * `az ad sp show --id http://acr-service-principal --query appId --output tsv`
-
-> 🛑 Every time you run the `az ad sp create-for-rbac` command you will generate a new password, obsoleting the old one. Run the commands, record the resulting values, and then use them going forward.
+```text
+az acr credential show -n MyRepository
+```
 
 Now use those values to enter the following `kubectl` command. Make sure to use a local CLI window that is connected to your minikube.
 
 ```bash
-kubectl create secret docker-registry acr-auth --docker-server myrepository.azurecr.io --docker-username <principal-id> --docker-password <principal-pw> --docker-email <your@email.com>
+kubectl create secret docker-registry acr-auth --docker-server myrepository.azurecr.io --docker-username <username> --docker-password <password> --docker-email <your@email.com>
 ```
+
 > ⚠ Make sure to replace "myrepository", "\<principal-id\>", "\<principal-pw\>", and "\<your\@email.com\>" with your real values.
 
 That'll create a secret in minikube named `acr-auth` that contains read-only credentials for your Azure repository.
@@ -156,9 +151,6 @@ spec:
           limits:
             memory: "128Mi"
             cpu: "500m"
-        env:
-        - name: RABBITMQ__URL
-          value: my-rabbitmq
       imagePullSecrets:
       - name: acr-auth
 ```
@@ -241,6 +233,32 @@ kubectl apply -f deploy.yaml
 At this point you can run `kubectl get pods` to see that two instances of the image are now running in the cluster. If you were fast enough typing `kubectl get pods` after applying the change you might even see the new pod in a non-running state as it downloads the image and spins up the instance.
 
 Go ahead and explore changing the `replicas` value to 3 and then down to 1. Quickly get the list of pods after each change to see how K8s starts and stops the various pod instances.
+
+## Using Docker Desktop Kubernetes
+I applied all the steps above for docker desktop on Windows, I assume this should work the same on Docker Desktop for mac. 
+
+ONe thing that can be super useful is having Kubernetes Dashboard running on your local cluster , this can be done this way
+
+```
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/dashboard/v1.10.1/src/deploy/recommended/kubernetes-dashboard.yaml
+```
+
+This will have the dashboard runing inside Kubernetes, to access it you need to run
+
+```
+kubectl proxy
+```
+
+You will need to get the token for accessing the dashboard and that can be generated bu runing the folloing command 
+
+```
+ kubectl describe secret kubernetes-dashboard --namespace=kube-system
+```
+
+Click on the below link and paste the token into the login page
+
+http://localhost:8001/api/v1/namespaces/kube-system/services/https:kubernetes-dashboard:/proxy/
+
 
 ## Cleanup
 

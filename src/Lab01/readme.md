@@ -12,11 +12,13 @@ Lesson goals:
 
 ## Create Website
 
+## Using Visual Studio 
+
 1. Open Visual Studio
 1. Create new ASP.NET Core project named `Gateway` ![](images/newproj.png) ![](images/newproj2.png) ![](images/newproj3.png)
    1. Use the *Web Application* template
    1. Uncheck the *Configure for HTTPS* option (to simplify for demo/lab purposes)
-   1. Check the *Enable Docker Support* option
+   1. Check the *Enable Docker Support* option (For Mac: Right click on project within solution explorer, choose add, choose         Docker Support
    1. Confirm the use of Linux containers
 1. Look at Solution Explorer ![](images/solutionexplorer.png)
    1. Notice how it is a normal ASP.NET Core Razor Pages project
@@ -38,7 +40,49 @@ Lesson goals:
    1. Refresh the page in the browser
    1. Notice now the breakpoint is hit as the Index page is reloaded ![](images/breakpoint.png)
 
+## Using text editor (VS-Code) with terminal
+
+in this example I am creating a WebAPi application
+
+1. Create the new app using command line 
+
+      ```text
+      dotnet new webapi --no-https
+      ```
+
+1. Now add a docker file to the Project to dockerrize the application
+
+      ```text
+         FROM mcr.microsoft.com/dotnet/core/aspnet:3.1 AS base
+         WORKDIR /app
+         EXPOSE 80
+         EXPOSE 443
+
+         FROM mcr.microsoft.com/dotnet/core/sdk:3.1 AS build
+         WORKDIR /src
+         COPY ["newprojectname.csproj", "./"]
+         RUN dotnet restore "./newprojectname.csproj"
+         COPY . .
+         WORKDIR /src
+         RUN dotnet build "newprojectname.csproj" -c Release -o /app/build
+
+         FROM build AS publish
+         RUN dotnet publish "newprojectname.csproj" -c Release -o /app/publish
+
+         FROM base AS final
+         WORKDIR /app
+         COPY --from=publish /app/publish .
+         ENTRYPOINT ["dotnet", "newprojectname.dll"]
+      ```
+
+Given that newprojectname is the name of the project
+
+Opening the folder in VS code should gives you the option to debug inside the container, but you may need to install docker extension and try to add it to the project, what it will do is configure vs-code to allow debugging. It may ask you to overwrite the Dockerfile, you can say yes or no as it basically create the same thing.
+
+> ℹ You may need to initialize the `UserSecretsId` element in your csproj file. If you get a build warning about this missing element, open a CLI window, navigate to the directory containing the csproj file and execute the `dotnet user-secrets init` command.
+
 ## Understanding Dockerfile
+
 Open `Dockerfile` in Visual Studio.
 
 This file defines how the container will be created. In fact, it defines not only the *final* container, but also intermediate containers that'll be used to build our .NET project on Linux.
@@ -48,7 +92,7 @@ This file defines how the container will be created. In fact, it defines not onl
 The first code block defines the "base image" to be used when creating the final container.
 
 ```dockerfile
-FROM mcr.microsoft.com/dotnet/core/aspnet:2.2-stretch-slim AS base
+FROM mcr.microsoft.com/dotnet/core/aspnet:3.1-buster-slim AS base
 WORKDIR /app
 EXPOSE 80
 ```
@@ -64,13 +108,13 @@ The `EXPOSE` statement indicates that this image will listen on port 80.
 The next code block defines an "intermediate image" used to build the ASP.NET Core project. This intermediate image only exists long enough to do the build, and then it is discarded. It isn't part of the final image, and isn't deployed.
 
 ```dockerfile
-FROM mcr.microsoft.com/dotnet/core/sdk:2.2-stretch AS build
+FROM mcr.microsoft.com/dotnet/core/sdk:3.1-buster AS build
 WORKDIR /src
 COPY ["Gateway/Gateway.csproj", "Gateway/"]
 RUN dotnet restore "Gateway/Gateway.csproj"
 COPY . .
 WORKDIR "/src/Gateway"
-RUN dotnet build "Gateway.csproj" -c Release -o /app
+RUN dotnet build "Gateway.csproj" -c Release -o /app/build
 ```
 
 Notice how this image uses a different base image. This base image is also from Microsoft, but includes the dotnet SDK, not just the runtime. It is *much* larger, because it includes the compilers and other SDK tools/components necessary to build dotnet apps.
@@ -89,7 +133,7 @@ The next code block defines another intermediate image used to publish the resul
 
 ```dockerfile
 FROM build AS publish
-RUN dotnet publish "Gateway.csproj" -c Release -o /app
+RUN dotnet publish "Gateway.csproj" -c Release -o /app/publish
 ```
 
 The `dotnet publish` command is executed to create publish output based on the code built in the previous step. The result is the same publish output you'd get if you manually ran a `dotnet publish` command, or did a Publish from Visual Studio. ![](images/publish.png)
@@ -101,7 +145,7 @@ The last code block creates the final image.
 ```dockerfile
 FROM base AS final
 WORKDIR /app
-COPY --from=publish /app .
+COPY --from=publish /app/publish .
 ENTRYPOINT ["dotnet", "Gateway.dll"]
 ```
 
@@ -133,7 +177,7 @@ Now that you've run some things via Docker, you can view the images on your work
 $ docker image ls
 REPOSITORY                                 TAG                      IMAGE ID            CREATED             SIZE
 gateway                                    dev                      6c6a43d12ad4        About an hour ago   260MB
-mcr.microsoft.com/dotnet/core/aspnet       2.2-stretch-slim         fe1db87517ca        5 hours ago         260MB
+mcr.microsoft.com/dotnet/core/aspnet       3.1-buster-slim          fe1db87517ca        5 hours ago         260MB
 hello-world                                latest                   4ab4c602aa5e        10 months ago       1.84kB
 ```
 
@@ -188,7 +232,7 @@ docker stop objective_margulis
 
 ## Image Repositories
 
-When you ran the `hello-world` app in Lab0, that container image was pulled from a cloud repository called Docker Hub (https://hub.docker.com) down to your workstation, and then a container was created from that locally cached image.
+When you ran the `hello-world` app in Lab00, that container image was pulled from a cloud repository called Docker Hub (https://hub.docker.com) down to your workstation, and then a container was created from that locally cached image.
 
 That's the normal flow for running images in containers in Docker (and in Kubernetes). Images are maintained in a repository, are pulled to a local cache, and then loaded into containers.
 
@@ -213,6 +257,8 @@ From the CLI you can run a command like this:
 ```text
 az acr create --name MyRepository --resource-group MyGroup --sku Basic --admin-enabled true
 ```
+
+> ⚠ You should use a totally lowercase name for your repository, as some commands and URLs are case-sensitive and it is simpler if everything is lower case.
 
 Replace `MyRepository` and `MyGroup` with values appropriate for your subscription.
 

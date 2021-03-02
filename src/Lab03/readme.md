@@ -1,19 +1,17 @@
 # Design and Build Message-Based Microservices
 
-In this lab we'll build a message-based service-based system that runs in docker-compose and K8s. It will use RabbitMQ as a messaging platform.
+In this lab we'll build a message-based service-based system that runs in docker-compose. It will use RabbitMQ as a messaging platform.
 
 Lesson goals:
 
-1. Use Helm to deploy RabbitMQ
 1. Use a gateway server to provide user access to a service-based system
    1. Understand how to implement a "synchronous" user experience to external users
    1. Discuss how SignalR _could_ be used to provide an asynchronous experience to external users
 1. Implement message-based services that work together to provide business functionality
+1. Install RabbitMQ into docker-compose
 1. See how docker-compose provides a convenient developer inner-loop experience
 1. Understand how docker-compose.yaml is different from K8s deploy/service definition files
 1. Understand compensating transactions
-1. Updating a running container in Kubernetes
-1. Implement retry policies for potential network failures
 
 ## Terminology
 
@@ -42,7 +40,7 @@ At a high level the system consists of a series of apps and services:
 
 The gateway server literally sits on the boundary of the service-based system, and is therefore available to external consumers and it participates with the system as a peer service. Its primary role is to act as a bridge between external web or mobile based communication protocols and the messaging protocol used _inside_ the service-based system.
 
-The gateway app provides web page and API interfaces for use by external consumers. In today's lab the focus will be on the web page UI. 
+The gateway app provides web page and API interfaces for use by external consumers. In today's lab the focus will be on the web page UI.
 
 ### Requesting a Sandwich
 
@@ -118,16 +116,10 @@ Before running your services in docker-compose it is necessary to set up a Rabbi
 
 1. Create a docker network for the demo
     1. `docker network create -d bridge --subnet 172.25.0.0/16 demonet`
-1. Install rabbitmq in the docker environment
-    1. `docker run -d rabbitmq`
-    1. Use `docker ps` to get the id of the container
-    1. Add rabbitmq to the demonet network
-        1. `docker network connect demonet <container id>`
-    1. Find the rabbitmq container's ip address in the network
-        1. `docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' <container id>`
-        1. You'll see two addresses, choose the 172.25.0.??? address from the demonet network
+1. Install rabbitmq in the docker environment, under the recently created network, with a name that will be uset to communicate with it.
+    1. `docker run -d --name sandwichqueue --net demonet rabbitmq`
 
-At this point a RabbitMQ container is running in Docker Desktop on your workstation, and you have made note of the container's IP address _inside Docker_.
+At this point a RabbitMQ container is running in Docker Desktop on your workstation, and Docker's internal DNS will recognize it as part of the demonet network, as `sandwichqueue` _inside Docker_.
 
 ## RabbitMQ Helper Code
 
@@ -149,7 +141,7 @@ A number of lines of code are necessary to open a queue and connection, to prepa
 
 ## Implement Gateway Service/App
 
-The `Gateway` project in the solution is very similar to the project you created in Lab02, in that it is an ASP.NET Core Razor Pages web project configured to work with Docker.
+The `Gateway` project in the solution is similar to the project you created in Lab02, with some differences. This is a server-side Blazor project configured to work with Docker.
 
 ### Enabling docker-compose
 
@@ -176,7 +168,7 @@ version: '3.4'
 
 services:
   gateway:
-    image: ${DOCKER_REGISTRY-}gateway
+    image: ${DOCKER_REGISTRY}gateway
     build:
       context: .
       dockerfile: Gateway/Dockerfile
@@ -197,17 +189,17 @@ One of the more important of the [12 Factors](https://12factor.net) is that conf
 
 ```yaml
   gateway:
-    image: ${DOCKER_REGISTRY-}gateway
+    image: ${DOCKER_REGISTRY}gateway
     build:
       context: .
       dockerfile: Gateway/Dockerfile
     environment: 
-      - RABBITMQ__URL=172.25.0.9
+      - RABBITMQ__URL=sandwichqueue
       - RABBITMQ__USER
       - RABBITMQ__PASSWORD
 ```
 
-> ⚠ Make sure to use the IP address of _your_ RabbitMQ instance.
+> ℹ the gateway container will connect to the rabbitmq container using its DNS name `sandwichqueue`.
 
 The `environment:` node provides a list of environment variables to be set in each container as it is initialized. These values can be easily retrieved by .NET Core code using the modern configuration subsystem using the default configuration for ASP.NET Core.
 
@@ -277,75 +269,82 @@ Later you will implement a class that sends a request to make a sandwich into th
 
 The next step in this process is to implement the `Index` page in the Gateway project.
 
-The markup for the page is already in the project, as it is basic Razor code:
+The markup for the page is already in the project, as it is basic Blazor UI markup:
 
 ```html
-@page
-@model Gateway.Pages.IndexModel
-@{
-  ViewData["Title"] = "Sandwich";
+@page "/"
+
+<h3>Make a sandwich</h3>
+
+@if (request == null)
+{
+<div>Loading...</div>
 }
-
-<h2>Sandwich</h2>
-
-<div class="row">
-  <h3>Select ingredients</h3>
-  @using (Html.BeginForm())
-  {
+else
+{
+  <EditForm Model="@request" OnSubmit="@FormSubmitted">
+    <DataAnnotationsValidator />
     <div>Meat</div>
-    <input asp-for="TheMeat" />
+    <InputText @bind-Value="request.Meat" />
+    <ValidationMessage For=@(() => request.Meat) />
     <div>Bread</div>
-    <input asp-for="TheBread" />
+    <InputText @bind-Value="request.Bread" />
+    <ValidationMessage For=@(() => request.Bread) />
     <div>Cheese</div>
-    <input asp-for="TheCheese" />
-    <div>Lettuce?</div>
-    <input asp-for="TheLettuce" />
+    <InputText @bind-Value="request.Cheese" />
+    <ValidationMessage For=@(() => request.Cheese) />
+    <div>Lettuce</div>
+    <InputCheckbox @bind-Value="request.Lettuce" />
     <br /><br />
-    <input type="submit" name="sendMessage" value="Ask cook to make sandwich" />
-  }
+    <input type="submit" value="Save" class="btn btn-primary" />
+  </EditForm>
+
   <p></p>
   <p>Reply from sandwich maker:</p>
-  <div style="font-size:24px">@Model.ReplyText</div>
-</div>
+  <div style="font-size:24px">@ReplyText</div>
+}
 ```
 
-Some of the code behind in `Index.cshtml.cs` is already in the project as well, establishing the properties that are data bound to the Razor markup.
-
-What isn't yet in the class is a constructor that obtains an `IServiceRequestor` instance via dependency injection. Add this field declaration and constructor to the class:
+Some of the code behind in the `@code` block is already in the page as well:
 
 ```c#
-    readonly Services.ISandwichRequestor _requestor;
+@code
+{
+  private Messages.SandwichRequest request;
+  private string ReplyText;
 
-    public IndexModel(Services.ISandwichRequestor requestor)
-    {
-      _requestor = requestor;
-    }
+  protected override void OnParametersSet()
+  {
+    request = new Messages.SandwichRequest();
+  }
+
+  private async void FormSubmitted(EditContext editContext)
+  {
+  }
+}
 ```
 
-Using this `_requestor` field it is possible to implement the `OnPost` method:
+What isn't yet in the class is the functionality that obtains an `IServiceRequestor` instance via dependency injection. Add this line at the top of the page after the `@page` directive:
+
+```html
+@inject Services.ISandwichRequestor requestor
+```
+
+Using this `requestor` field it is possible to implement the `FormSubmitted` method:
 
 ```c#
-    public async Task OnPost()
-    {
-      var request = new Messages.SandwichRequest
-      {
-        Meat = TheMeat,
-        Bread = TheBread,
-        Cheese = TheCheese,
-        Lettuce = TheLettuce
-      };
-      var result = await _requestor.RequestSandwich(request);
-
-      if (result.Success)
-        ReplyText = result.Description;
-      else
-        ReplyText = result.Error;
-    }
+  private async void FormSubmitted(EditContext editContext)
+  {
+    var result = await requestor.RequestSandwich(request);
+    if (result.Success)
+      ReplyText = result.Description;
+    else
+      ReplyText = result.Error;
+    StateHasChanged();
+  }
 ```
 
-This method creates a `SandwichRequest` message object, populating it with the values provided from the Razor markup via data binding.
-
-It then invokes the `RequestSandwich` method, awaiting the response from the service-based system.
+The page uses data binding to populate a `SandwichRequest` message object with user input. This method uses that message object and sends it to the service-based system using the `RequestSandwich` method on the `requestor` object.
 
 Once a response is available, the data bound `ReplyText` UI control is updated to reflect the success or failure result from the sandwichmaker service.
 
@@ -944,10 +943,10 @@ If you are using Visual Studio 2017 you'll have to do this process manually.
 Add a file named `Dockerfile` to the project with the following contents:
 
 ```docker
-FROM microsoft/dotnet:2.1-runtime AS base
+FROM mcr.microsoft.com/dotnet/core/runtime:3.0-buster-slim AS base
 WORKDIR /app
 
-FROM microsoft/dotnet:2.1-sdk AS build
+FROM mcr.microsoft.com/dotnet/core/sdk:3.0-buster AS build
 WORKDIR /src
 COPY BreadService/BreadService.csproj BreadService/
 COPY RabbitQueue/RabbitQueue.csproj RabbitQueue/
@@ -981,350 +980,22 @@ Make sure this file contains an entry for the new `breadservice`:
 
 ```yaml
   breadservice:
-    image: ${DOCKER_REGISTRY-}breadservice
+    image: ${DOCKER_REGISTRY}breadservice
     build:
       context: .
       dockerfile: BreadService/Dockerfile
     environment: 
-      - RABBITMQ__URL=172.25.0.9
+      - RABBITMQ__URL=sandwichqueue
       - RABBITMQ__USER
       - RABBITMQ__PASSWORD
 ```
 
 At this point your `docker-compose.yml` file contains entries only for the `gateway` and `breadservice` services. In reality it needs entries for all the services necessary to run the system in your local environment.
 
-Making note of the IP address for your RabbitMQ instance, copy the `docker-compose.yml` file from the `End` directory into your `Start` directory, replacing the current file. The result is a `docker-compose.yml` that has entries for all the services in the system.
-
-> ⚠ **IMPORTANT:** Replace the IP addresses for `RABBITMQ__URL` with the IP address for your RabbitMQ instance within Docker. This needs to be done for all the services in the file.
+Copy the `docker-compose.yml` file from the `End` directory into your `Start` directory, replacing the current file. The result is a `docker-compose.yml` that has entries for all the services in the system.
 
 ## Running in docker-compose
 
 At this point you should be able to press F5 or ctrl-F5 to run the solution in docker-compose.
 
 If you request a sandwich with lettuce it'll fail right away, because that service has an inventory level of 0 to start. You should be able to request other sandwich combinations until running out of inventory.
-
-## Deploy to Kubernetes
-
-The final step in this lab is to deploy the services to K8s. The docker-compose environment is convenient for the F5 experience and debugging, but ultimately most production systems will run on K8s or something similar.
-
-### Deploy RabbitMQ to Kubernetes
-
-Open a CLI window.
-
-1. Type `helm install --name my-rabbitmq --set rabbitmq.username=guest,rabbitmq.password=guest,rabbitmq.erlangCookie=supersecretkey stable/rabbitmq`
-   1. Note that in a real environment you'll want to set the `username`, `password`, and `erlangCookie` values to secret values
-1. Helm will display infomration about the deployment
-1. Type `helm list` to list installed releases
-1. Type `kubectl get pods` to list running instances
-1. Type `kubectl get services` to list exposed services
-
-At this point you should have an instance of RabbitMQ running in minikube. The output from `kubectl get services` should be something like this:
-
-```text
-$ kubectl get services
-NAME                   TYPE        CLUSTER-IP       EXTERNAL-IP   PORT(S)                                 AGE
-kubernetes             ClusterIP   10.96.0.1        <none>        443/TCP                                 88d
-my-rabbitmq            ClusterIP   10.107.206.219   <none>        4369/TCP,5672/TCP,25672/TCP,15672/TCP   8m
-my-rabbitmq-headless   ClusterIP   None             <none>        4369/TCP,5672/TCP,25672/TCP,15672/TCP   8m
-```
-
-Make note of the `my-rabbitmq` name, and also notice how it has been provided with a `CLUSTER-IP` address. This address is how the RabbitMQ service is exposed within the K8s cluster itself. This isn't a hard-coded or consistent value however, so later on you'll use the _name_ of the service to allow our other running container images to interact with RabbitMQ.
-
-### Replace myrepository With the Real Name
-
-Most of the files in the `deploy/k8s` directory refer to `myrepository` instead of the real name of your ACR repository. Fortunately it is possible to use bash to quickly fix them all up with the correct name.
-
-1. Open a Git Bash CLI
-1. Change directory to `deploy/k8s`
-1. Type `grep -rl --include=*.sh --include=*.yaml --include=*.yml 'myrepository' | tee | xargs sed -i 's/myrepository/realname/g'`
-   * ⚠ Replace `realname` with your real ACR repository name!
-
-### Deployment and Service Configuration Files
-
-K8s uses a different syntax for its deployment and service definition files. You've already seen an example of these in a previous lab.
-
-There is already a `Start/deploy/k8s` directory in the directory structure. In a VS Code instance, open this `deploy/k8s` directory. Add a `breadservice-deployment.yaml` file with the following contents:
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: breadservice
-spec:
-  selector:
-    matchLabels:
-      app: breadservice
-  replicas: 1
-  strategy:
-    rollingUpdate:
-      maxSurge: 1
-      maxUnavailable: 1
-  minReadySeconds: 5
-  template:
-    metadata:
-      labels:
-        app: breadservice
-    spec:
-      containers:
-      - name: breadservice
-        image: myrepository.azurecr.io/breadservice:lab03
-        resources:
-          limits:
-            memory: "128Mi"
-            cpu: "500m"
-        env:
-        - name: RABBITMQ__URL
-          value: my-rabbitmq
-      imagePullSecrets:
-      - name: acr-auth
-```
-
-> ℹ The `myrepository` name should already be replaced with your ACR repo name.
-
-Notice that the `RABBITMQ__URL` environment variable is being set to the _name_ of the RabbitMQ instance you started in K8s in a previous lab. Rather than using a hard-coded IP address, it is important to use the DNS name so K8s can manage the IP address automatically.
-
-> ℹ The .NET Core configuration subsystem translates an environment variable such as `RABBITMQ__URL` to a setting with the key `rabbitmq:url`. So in the .NET code you'll see something like `_config["rabbitmq:url"]` referring to this environment variable.
-
-You can review the pre-existing yaml files in the directory. There's a deployment file for each service in the system, plus a service definition file for the gateway service.
-
-No K8s service definition files are necessary for most of our services, because they don't require any sort of public IP address, or even any known cluster-level IP address. Because all communication occurs via queued messaging, each service is truly a standalone app that has no direct interaction with any other apps via IP address.
-
-Only the gateway service needs a known IP address, and that's because it exposes a web frontend, including web pages and an API for external consumers.
-
-### Pushing the Container Images to Azure
-
-Before you can apply the deployment and service files to the K8s cluster, the Docker container images need to be available in the repository. You've already seen how to tag and push an image to ACR, and that process now needs to happen for all the images in the system.
-
-> ℹ Pushing all the images at once like in this lab isn't necessarily normal over time. Remember that the primary goal of service-based architectures is to be able to deploy or update individual services without redeploying everything else. But you do need to get the whole system running in the first place before you can go into long-term maintenance mode.
-
-#### Building the Images
-
-In the `deploy` directory there's a `build.sh` bash script that builds all the images for the system.
-
-```bash
-#!/bin/bash
-
-docker build -f ../BreadService/Dockerfile -t breadservice:dev ..
-docker build -f ../CheeseService/Dockerfile -t cheeseservice:dev ..
-docker build -f ../LettuceService/Dockerfile -t lettuceservice:dev ..
-docker build -f ../MeatService/Dockerfile -t meatservice:dev ..
-docker build -f ../Gateway/Dockerfile -t gateway:dev ..
-docker build -f ../SandwichMaker/Dockerfile -t sandwichmaker:dev ..
-```
-
-Open a Git Bash CLI window and do the following:
-
-1. Change directory to `deploy`
-1. `chmod +x build.sh`
-1. `./build.sh`
-
-This will build the Docker image for each service in the system based on the individual `Dockerfile` definitions in each project directory.
-
-> ℹ This build process may take some time depending on the speed of your laptop.
-
-#### Tagging the Images
-
-In the `deploy/k8s` directory there's a `tag.sh` bash script that tags all the images created by `build.sh`.
-
-```bash
-#!/bin/bash
-
-docker tag breadservice:dev myrepository.azurecr.io/breadservice:lab03
-docker tag cheeseservice:dev myrepository.azurecr.io/cheeseservice:lab03
-docker tag meatservice:dev myrepository.azurecr.io/meatservice:lab03
-docker tag lettuceservice:dev myrepository.azurecr.io/lettuceservice:lab03
-docker tag gateway:dev myrepository.azurecr.io/gateway:lab03
-docker tag sandwichmaker:dev myrepository.azurecr.io/sandwichmaker:lab03
-```
-
-> ℹ The `myrepository` name should already be replaced with your ACR repo name.
-
-Open a Git Bash CLI and do the following:
-
-1. Change directory to `deploy/k8s`
-1. `chmod +x tag.sh`
-1. `./tag.sh`
-
-This will tag each container image with the repository name for your ACR instance.
-
-#### Pushing the Images
-
-In the `deploy/k8s` directory there's a `push.sh` bash script that pushes the local images to the remote repository.
-
-```bash
-#!/bin/bash
-
-docker push myrepository.azurecr.io/gateway:lab03
-docker push myrepository.azurecr.io/cheeseservice:lab03
-docker push myrepository.azurecr.io/lettuceservice:lab03
-docker push myrepository.azurecr.io/sandwichmaker:lab03
-docker push myrepository.azurecr.io/breadservice:lab03
-docker push myrepository.azurecr.io/meatservice:lab03
-```
-
-> ℹ The `myrepository` name should already be replaced with your ACR repo name.
-
-Open a Git Bash CLI and do the following:
-
-1. Change directory to `deploy/k8s`
-1. `chmod +x push.sh`
-1. `./push.sh`
-
-The result is that all the local images are pushed to the remote ACR repository.
-
-### Applying the Kubernetes State
-
-At this point you have all the deployment and service definition files that describe the desired state for the K8s cluster. And you have all the Docker container images in the ACR repository so they are available for download to the K8s cluster.
-
-> ⚠ **IMPORTANT:** before applying the desired state for this lab, _make sure_ you have done the cleanup step in the previous lab so no containers are running other than RabbitMQ. You can check this with a `kubectl get pods` command.
-
-The next step is to apply the desired state to the cluster by executing each yaml file via `kubectl apply`. To simplify this process, there's a `run-k8s.sh` file in the `deploy/k8s` directory:
-
-```bash
-#!/bin/bash
-
-kubectl apply -f gateway-deployment.yaml
-kubectl apply -f gateway-service.yaml
-kubectl apply -f breadservice-deployment.yaml
-kubectl apply -f cheeseservice-deployment.yaml
-kubectl apply -f lettuceservice-deployment.yaml
-kubectl apply -f meatservice-deployment.yaml
-kubectl apply -f sandwichmaker-deployment.yaml
-```
-
-Open a Git Bash CLI window and do the following:
-
-1. Change directory to `deploy/k8s`
-1. `chmod +x run-k8s.sh`
-1. `./run-k8s.sh`
-1. `kubectl get pods`
-
-The result is that the desired state described in your local yaml files is applied to the K8s cluster.
-
-If you immediately execute (and repeat) the `kubectl get pods` command you can watch as the K8s pods download, load, and start executing each container image. This may take a little time, because as each pod comes online it needs to download the container image from ACR.
-
-> ℹ Depending on the number of folks doing the lab, and the Internet speeds in the facility, patience may be required! In a production environment it is likely that you'll have much higher Internet speeds, less competition for bandwidth, and so spinning up a container in a pod will be quite fast.
-
-Make sure (via `kubectl get pods`) that all your services are running before moving on to the next step.
-
-### Interacting with the System
-
-1. Open a CLI window _as administrator_
-1. Type `minikube service gateway --url`
-   1. This will show the localhost URL provided by minikube to access the service
-1. Type `minikube service gateway`
-   1. This will open your default browser to the URL for the service - it is a shortcut provided by minikube for testing
-
-> ⚠ An Admin CLI window (e.g. run as administrator) is required because interacting with the `minikube` command always needs elevated permissions.
-
-As with the docker-compose instance, you should be able to request sandwiches from the system. Notice that there's no shared state (such as inventory) between the services running in docker-compose and those running in minikube. In a real scenario any such state would typically be maintained in a database, and the various service implementations would be interacting with the database instead of in-memory data.
-
-## Implementing Retry Policies
-
-First on the list of [Fallacies of Distributed Computing](https://en.wikipedia.org/wiki/Fallacies_of_distributed_computing) is the idea that the network is reliable. Virtually all code folks write tends to assume that the network is there and won't fail. Rarely do people implement retry logic in case opening a database, sending an HTTP request, or writing to a queue might fail.
-
-While we tend to get away with that approach, it becomes _really_ problematic when your code is hosted in a dynamic, self-healing runtime like Kubernetes. There's just no guarantee that a service won't go down, and a replacement spun up in its place by K8s.
-
-Such a thing can happen due to bugs, or an intentional rolling update of a running service.
-
-In this system it is possible that the RabbitMQ instance might become temporarily unavailable.
-
-> ℹ In practice this is unlikely, because a production system will almost certainly deploy RabbitMQ across multiple redundant K8s nodes, leveraging RabbitMQ and K8s to achieve high fault tolerance.
-
-### Using Polly Retry Policies
-
-To overcome potential failures when trying to interact with any direct network interactions you should implement a retry policy. One common solution is to use the `Polly` or `Steeltoe` NuGet packages. In this lab you will use the `Polly` package.
-
-In Visual Studio, right-click on the `Gateway` project and choose *Manage NuGet Packages* to add a reference to the `Polly` package.
-
-Then open the `SandwichRequestor` class in the `Services` folder. This class contains the code that sends messages to RabbitMQ, so it is an ideal location to implement a retry policy.
-
-Add a `using Polly;` statement at the top of the file.
-
-Then in the class define a field for the retry policy:
-
-```c#
-    readonly Policy _retryPolicy = Policy.
-      Handle<Exception>().
-      WaitAndRetry(3, r => TimeSpan.FromSeconds(Math.Pow(2, r)));
-```
-
-Polly provides a lot of flexibility around retry policies, and supports both sync and async concepts. Because the call to RabbitMQ is synchronous, this is a synchronous policy.
-
-The policy itself will trigger on any `Exception`, and will retry three times. The `Math.Pow(2, r)` expression implements an exponential backoff. The first retry will happen in 1 second, the second 2 seconds later, the third 4 seconds later. In total it will consume 7 seconds before giving up and letting the exception flow to the rest of the code.
-
-Using the policy is fairly straightforward. The policy object is used to wrap a block of your code, and it "protects" that code. In this case, any `Exception` thrown by the protected code will trigger the retry policy.
-
-Edit the `SandwichRequest` method where the queue is opened and the message sent to wrap it with the policy:
-
-```c#
-        _retryPolicy.Execute(() =>
-        {
-          using (var _queue = new Queue(_config["rabbitmq:url"], "customer"))
-          {
-            _queue.SendMessage("sandwichmaker", correlationId, request);
-          }
-        });
-```
-
-You can see how the retry policy's `Execute` method is used to encapsulate the block of code that uses the network to connect to RabbitMQ and send a message. The most likely failure scenario here is that the RabbitMQ instance is momentarily unavailable, and as long as it becomes available again within seven seconds this code will ultimately succeed.
-
-Make sure to save the changes to the code file and project.
-
-## Updating a Running Container
-
-At this point you have a newer version of the gateway service to deploy: the updated code with a retry policy.
-
-Fortunately the Kubernetes deployment for the gateway service specified the use of rolling updates. You can review the `End/deploy/k8s/gateway-deployment.yaml` file to refresh you memory.
-
-What this means is that we can tell K8s that there's a newer version of the gateway image and "magic" will happen:
-
-1. Kubernetes will suspend all inbound network requests to the existing pod
-   1. Any existing network requests will still be routed to and handled by the existing pod
-1. Kubernetes will spin up a new instance of the pod
-   1. The new pod will download the new container image
-   1. The new pod will start up the new container image
-1. Kubernetes will route all inbound network requests to the new pod
-1. Kubernetes will terminate the old pod
-
-Perform the following steps in a Git Bash CLI to see this happen:
-
-1. Change directory to `Lab03/Start`
-1. Build the new container image: `docker build -f Gateway/Dockerfile -t gateway:dev .`
-1. Tag the new image: `docker tag gateway:dev myrepository.azurecr.io/gateway:lab03-1`
-1. Push the new image: `docker push myrepository.azurecr.io/gateway:lab03-1`
-1. Edit the `deploy/k8s/gateway-deployment.yaml` file to express the new desired state
-   * Update the `image` element with the new tag
-   * `        image: myrepository.azurecr.io/gateway:lab03-1`
-1. Apply the new desired state with `kubectl`
-   * `kubectl apply -f gateway-deployment.yaml`
-1. Quickly and repeatedly use `kubectl get pods` to watch the rolling update occur
-
-At this point you've updated the gateway service to a newer version, and it is running with a retry policy.
-
-> 🎉 If you are ahead of time, feel free to go through all the services and add retry policies anywhere the code opens and sends messages to RabbitMQ.
-
-## Tearing Down the System
-
-Once you are done interacting with the system you can shut it down. In the `deploy/k8s` directory there's a `teardown.sh` bash script that uses `kubectl` to delete the deployment and service items from the cluster:
-
-```bash
-#!/bin/bash
-
-kubectl delete deployment gateway
-kubectl delete service gateway
-kubectl delete deployment breadservice
-kubectl delete deployment cheeseservice
-kubectl delete deployment lettuceservice
-kubectl delete deployment meatservice
-kubectl delete deployment sandwichmaker
-```
-
-Open a Git Bash CLI window and do the following:
-
-1. Change directory to `deploy/k8s`
-1. `chmod +x teardown.sh`
-1. `./teardown.sh`
-
-It is critical that you do this before moving on to subsequent labs.
-
