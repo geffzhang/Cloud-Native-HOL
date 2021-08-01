@@ -1,26 +1,26 @@
 # Run Microservices in Kubernetes
 
-In this lab we'll run the microservices system from Lab03 in Kubernetes.
+In this lab we'll run the microservices system from Lab03 in Kubernetes, and make use of the RabbitMQ service configured in Lab04.
 
 Lesson goals:
 
 1. Use a gateway server to provide user access to a service-based system
-   1. Understand how to implement a "synchronous" user experience to external users
-   1. Discuss how SignalR _could_ be used to provide an asynchronous experience to external users
-1. Updating a running container in Kubernetes
+   1. Discuss how to implement a "synchronous" user experience to external users
+   1. Use Blazor (and SignalR) to provide an interactive and asynchronous experience to external users
+1. Update a running container in Kubernetes
 1. Implement retry policies for potential network failures
 
 ## Deploy to Kubernetes
 
-The final step in this lab is to deploy the services to K8s. The docker-compose environment is convenient for the F5 experience and debugging, but ultimately most production systems will run on K8s or something similar.
+The final step in this lab is to deploy the services to K8s. The docker-compose environment is convenient for the F5 experience and debugging, but ultimately most production systems will run on k8s or something similar.
 
 ### Replace myrepository With the Real Name
 
-Most of the files in the `deploy/k8s` directory refer to `myrepository` instead of the real name of your ACR repository. Fortunately it is possible to use bash to quickly fix them all up with the correct name.
+Most of the files in the `Lab03/deploy/k8s` directory refer to `myrepository` instead of the real name of your ACR repository. Fortunately it is possible to use bash to quickly fix them all up with the correct name.
 
 1. Open a Git Bash CLI
-1. Change directory to `deploy/k8s`
-1. Type `grep -rl --include=*.sh --include=*.yaml --include=*.yml 'myrepository' | tee | xargs sed -i 's/myrepository/realname/g'`
+1. Change directory to `Lab03/deploy/k8s`
+1. Type `grep -rl --include=*.sh --include=*.yaml --include=*.yml 'myrepository' | xargs sed -i 's/myrepository/realname/g'`
    * ⚠ Replace `realname` with your real ACR repository name!
 
 ### Deployment and Service Configuration Files
@@ -193,15 +193,17 @@ Make sure (via `kubectl get pods`) that all your services are running before mov
 
 ### Interacting with the System
 
-1. Open a CLI window _as administrator_
-1. Type `minikube service gateway --url`
-   1. This will show the localhost URL provided by minikube to access the service
-1. Type `minikube service gateway`
-   1. This will open your default browser to the URL for the service - it is a shortcut provided by minikube for testing
+To gain access to pods running in the cluster, use kubectl to set up a port forwarding tunnel.
 
-> ⚠ An Admin CLI window (e.g. run as administrator) is required because interacting with the `minikube` command always needs elevated permissions.
+```text
+kubectl port-forward svc/gateway 31919:80
+```
 
-As with the docker-compose instance, you should be able to request sandwiches from the system. Notice that there's no shared state (such as inventory) between the services running in docker-compose and those running in minikube. In a real scenario any such state would typically be maintained in a database, and the various service implementations would be interacting with the database instead of in-memory data.
+The `31919` port is arbitrary, so you can use any high number you'd like. This makes `localhost:31919` on your computer forward to port 80 of the `gateway` service.
+
+Open a browser to `localhost:31919` using the port of the Gateway service.
+
+You should be able to request sandwiches from the system. Notice that there's no shared state (such as inventory) between the services running in docker-compose and those running in k8s. In a real scenario any such state would typically be maintained in a database, and the various service implementations would be interacting with the database instead of in-memory data.
 
 ## Implementing Retry Policies
 
