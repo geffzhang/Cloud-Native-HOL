@@ -16,10 +16,10 @@ The final step in this lab is to deploy the services to K8s. The docker-compose 
 
 ### Replace myrepository With the Real Name
 
-Most of the files in the `Lab03/deploy/k8s` directory refer to `myrepository` instead of the real name of your ACR repository. Fortunately it is possible to use bash to quickly fix them all up with the correct name.
+Most of the files in the `Lab03/Start/deploy/k8s` directory refer to `myrepository` instead of the real name of your ACR repository. Fortunately it is possible to use bash to quickly fix them all up with the correct name.
 
 1. Open a Git Bash CLI
-1. Change directory to `Lab03/deploy/k8s`
+1. Change directory to `Lab03/Start/deploy/k8s`
 1. Type `grep -rl --include=*.sh --include=*.yaml --include=*.yml 'myrepository' | xargs sed -i 's/myrepository/realname/g'`
    * ⚠ Replace `realname` with your real ACR repository name!
 
@@ -292,11 +292,12 @@ At this point you've updated the gateway service to a newer version, and it is r
 
 ## Tearing Down the System
 
-Once you are done interacting with the system you can shut it down. In the `deploy/k8s` directory there's a `teardown.sh` bash script that uses `kubectl` to delete the deployment and service items from the cluster:
+Once you are done interacting with the system you can shut it down. In the `Lab03/End/deploy/k8s` directory there's a `teardown.sh` bash script that uses `kubectl` to delete the deployment and service items from the cluster:
 
 ```bash
 #!/bin/bash
 
+helm uninstall my-rabbitmq
 kubectl delete deployment gateway
 kubectl delete service gateway
 kubectl delete deployment breadservice

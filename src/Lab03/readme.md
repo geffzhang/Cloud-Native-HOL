@@ -5,8 +5,8 @@ In this lab we'll build a message-based service-based system that runs in docker
 Lesson goals:
 
 1. Use a gateway server to provide user access to a service-based system
-   1. Understand how to implement a "synchronous" user experience to external users
-   1. Discuss how SignalR _could_ be used to provide an asynchronous experience to external users
+   1. Understand how to implement a server-side Blazor user experience that leverages SignalR to provide an asynchronous experience to users
+   1. Discuss how to implement a "synchronous" user experience to external users using MVC or Razor Pages
 1. Implement message-based services that work together to provide business functionality
 1. Install RabbitMQ into docker-compose
 1. See how docker-compose provides a convenient developer inner-loop experience
@@ -195,8 +195,8 @@ One of the more important of the [12 Factors](https://12factor.net) is that conf
       dockerfile: Gateway/Dockerfile
     environment: 
       - RABBITMQ__URL=sandwichqueue
-      - RABBITMQ__USER
-      - RABBITMQ__PASSWORD
+      - RABBITMQ__USER=
+      - RABBITMQ__PASSWORD=
 ```
 
 > ℹ the gateway container will connect to the rabbitmq container using its DNS name `sandwichqueue`.
@@ -207,7 +207,7 @@ In other words, your ASP.NET Core code can easily access the three variables def
 
 ### Examine the WorkInProgress Class
 
-Open the `Services/WorkInProgress.cs` file. This simple code exists because it is necessary to keep track of outstanding user requests (browser postback requests) that have requested a sandwich. Remember the overall workflow:
+Open the `Services/WorkInProgress.cs` file from the `Gateway` project. This simple code exists because it is necessary to keep track of outstanding user requests (browser postback requests) that have requested a sandwich. Remember the overall workflow:
 
 1. User requests a sandwich in their browser
 1. Gateway app handles postback, sending a request to the sandwichmaker service
@@ -221,10 +221,10 @@ The `Lock` property maintains a reference to an `AsyncManualResetEvent`. The use
 
 This workflow will become more clear as you implement the code to send and receive messages, as that code will make use of this work in progress implementation.
 
-The `WorkInProgress` instance is made available to other code in the `Gateway` project via dependency injection. In the `Startup` class's `ConfigureServices` method there's a singleton declaration for the type:
+The `WorkInProgress` instance is made available to other code in the `Gateway` project via dependency injection. In the `Program.cs` file there's a singleton declaration for the type:
 
 ```c#
-      services.AddSingleton<Services.IWorkInProgress>((e) => new Services.WorkInProgress());
+      builder.Services.AddSingleton<Services.IWorkInProgress>((e) => new Services.WorkInProgress());
 ```
 
 Classes requiring access to work in progress information can gain access to this singleton via standard .NET Core dependency injection.
@@ -457,10 +457,10 @@ In all cases the code is waiting for a callback via some sort of network IO, and
 
 #### Adding the Service to IServiceCollection
 
-With the `SandwichRequestor` service implemented, it is possible to make it available for use in the `Index` page via dependency injection. This is done by adding some code to the `Startup` class:
+With the `SandwichRequestor` service implemented, it is possible to make it available for use in the `Index` page via dependency injection. This is done by adding some code to the `Program.cs` file:
 
 ```c#
-      services.AddSingleton<Services.ISandwichRequestor>((e) =>
+      builder.Services.AddSingleton<Services.ISandwichRequestor>((e) =>
           new Services.SandwichRequestor(
               e.GetService<IConfiguration>(), 
               e.GetService<Services.IWorkInProgress>()));
@@ -536,10 +536,10 @@ Inside the callback code the work in progress item is updated via the `CompleteW
 
 #### Adding the Service to IServiceCollection
 
-A Hosted Service is added to ASP.NET Core in the `Startup` class like any other dependency injection service. Add the following line of code to the `ConfigureServices` method:
+A Hosted Service is added to ASP.NET Core in the `Program.cs` file like any other dependency injection service. Add the following line of code:
 
 ```c#
-      services.AddHostedService<Services.SandwichmakerListener>();
+    builder.Services.AddHostedService<Services.SandwichmakerListener>();
 ```
 
 As the web server starts up it'll automatically create and start an instance of this type.
@@ -779,7 +779,7 @@ Now that you've seen how the more complex sandwichmaker service is implemented i
 
 ### Create the Project
 
-Add a new .NET Core Console App project to the solution named `BreadService`. Make sure it targets .NET 5.0.
+Add a new .NET Core Console App project to the solution named `BreadService`. Make sure it targets .NET 6.0.
 
 It needs the following NuGet references:
 
@@ -945,8 +945,8 @@ Make sure this file contains an entry for the new `breadservice`:
       dockerfile: BreadService/Dockerfile
     environment: 
       - RABBITMQ__URL=sandwichqueue
-      - RABBITMQ__USER
-      - RABBITMQ__PASSWORD
+      - RABBITMQ__USER=
+      - RABBITMQ__PASSWORD=
 ```
 
 At this point your `docker-compose.yml` file contains entries only for the `gateway` and `breadservice` services. In reality it needs entries for all the services necessary to run the system in your local environment.
